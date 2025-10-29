@@ -1,0 +1,19 @@
+[project]
+name = "sentinel"
+version = "0.1.0"
+description = "Policy-driven input wrapper with taint tracking and sink patches"
+readme = "README.md"
+authors = [
+    { name = "sach-12", email = "sbalasubramanyam@ucdavis.edu" },
+    { name = "Sarika-dinesh", email = "sarikadinesh@ucdavis.edu"},
+    { name = "shreyaslshah", email = "slshah@ucdavis.edu"}
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+sentinel = "sentinel:main"
+
+[build-system]
+requires = ["uv_build>=0.8.23,<0.9.0"]
+build-backend = "uv_build"
