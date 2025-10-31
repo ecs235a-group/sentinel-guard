@@ -1,0 +1,21 @@
+version: 1
+
+defaults:
+  mode: block
+
+validators:
+  - id: safe_filename
+    type: string
+    max_len: 128
+    regex: '^[A-Za-z0-9._-]+$'
+    deny_substrings: ['..', '/', '\\']
+
+  - id: direct_child_of_uploads
+    type: path
+    must_be_under: ['data/uploads']
+    deny_subdirectories: true
+
+
+  - id: shell_safe
+    type: string
+    deny_regex: '(;|&&|\|\||`|\$\(|\)|\n)'
