@@ -10,12 +10,16 @@ validators:
     regex: '^[A-Za-z0-9._-]+$'
     deny_substrings: ['..', '/', '\\']
 
-  - id: direct_child_of_uploads
+  - id: path_in_uploads
     type: path
     must_be_under: ['data/uploads']
     deny_subdirectories: true
 
-
   - id: shell_safe
     type: string
     deny_regex: '(;|&&|\|\||`|\$\(|\)|\n)'
+
+  - id: sql_safe
+    type: string
+    deny_regex: '(?i)(;.*(drop|delete|insert|update|create|alter)|union.*select|--|\bor\s+1\s*=\s*1|/\*|\*/)'
+    deny_substrings: ['--', '/*', '*/', '; DROP', '; DELETE', '; INSERT', '; UPDATE', 'UNION SELECT']

@@ -1,2 +1,1 @@
-def main() -> None:
-    print("sentinel project init")
+from .policy import load_policy, Policy
