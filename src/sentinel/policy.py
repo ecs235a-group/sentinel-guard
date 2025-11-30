@@ -2,18 +2,20 @@ from dataclasses import dataclass
 from typing import Any
 import yaml
 
+
 @dataclass
 class ValidatorDef:
     id: str
     type: str
     params: dict[str, Any]
 
+
 @dataclass
 class Policy:
     version: int
     defaults: dict[str, Any]
     validators: dict[str, ValidatorDef]
-    
+
 
 def _parse_validators(items: list[dict[str, Any]]) -> dict[str, ValidatorDef]:
     out: dict[str, ValidatorDef] = {}
