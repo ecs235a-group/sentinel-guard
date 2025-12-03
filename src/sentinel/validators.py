@@ -1,9 +1,13 @@
-from typing import Any
+from __future__ import annotations
 import re
+import json
 import unicodedata
+from typing import Any
 from pathlib import Path
+from jsonschema import Draft7Validator, exceptions as jsonschema_exceptions
 
 from .policy import Policy
+from .taint import TaintedStr
 
 
 class ValidationError(Exception):
@@ -82,6 +86,37 @@ def _validate_path(value: Any, params: dict[str, Any]) -> tuple[bool, str]:
     return False, f"path not under allowed roots: {must_be_under}"
 
 
+_schema_cache: dict[str, Draft7Validator] = {}
+
+
+def _load_schema(ref: str) -> Draft7Validator:
+    if ref in _schema_cache:
+        return _schema_cache[ref]
+    # Assume local file path
+    with open(ref, "r", encoding="utf-8") as f:
+        schema = json.load(f)
+    v = Draft7Validator(schema)
+    _schema_cache[ref] = v
+    return v
+
+
+def _validate_json(obj: Any, params: dict[str, Any]) -> tuple[bool, str]:
+    ref = params.get("schema_ref")
+    if not ref:
+        return False, "no schema_ref provided"
+    try:
+        validator = _load_schema(ref)
+        errors = sorted(validator.iter_errors(obj), key=lambda e: list(e.path))
+        if errors:
+            first = errors[0]
+            return False, f"json schema error at {list(first.path)}: {first.message}"
+        return True, "ok"
+    except jsonschema_exceptions.ValidationError as e:
+        return False, f"json schema error: {str(e)}"
+    except Exception as e:
+        return False, f"json schema load/validate error: {e}"
+
+
 def validate_value(policy: Policy, validator_id: str, value: Any) -> tuple[bool, str]:
     vdef = policy.validators.get(validator_id)
     if not vdef:
@@ -90,7 +125,15 @@ def validate_value(policy: Policy, validator_id: str, value: Any) -> tuple[bool,
     params = vdef.params
 
     if vtype == "string":
-        return _validate_string(value, params)
+        return _validate_string(str(value), params)
     if vtype == "path":
-        return _validate_path(value, params)
+        return _validate_path(str(value), params)
+    if vtype == "json_schema":
+        return _validate_json(value, params)
     return False, f"unknown validator type {vtype}"
+
+
+def validate_json_by_id(
+    policy: Policy, validator_id: str, obj: Any
+) -> tuple[bool, str]:
+    return validate_value(policy, validator_id, obj)
