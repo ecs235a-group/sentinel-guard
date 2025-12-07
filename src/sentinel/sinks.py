@@ -12,7 +12,7 @@ from .policy import Policy
 from .validators import validate_value
 from .logging_utils import log
 
-# Try to import taint_flow from middleware (may not exist yet in Phase 5)
+# Import taint_flow from middleware 
 try:
     from .middleware import taint_flow
 except ImportError:
