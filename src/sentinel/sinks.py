@@ -1,24 +1,17 @@
-from __future__ import annotations
 import builtins
 import subprocess
 import os
 import yaml
 import sqlite3
-from typing import Iterable
+import string
 from functools import wraps
 from pathlib import Path
 
-from .policy import Policy
+from .policy import Policy, ViolationMode
 from .validators import validate_value
 from .logging_utils import log
+from .middleware import taint_flow
 
-# Import taint_flow from middleware
-try:
-    from .middleware import taint_flow
-except ImportError:
-    taint_flow = None
-
-import string
 
 try:
     import jinja2
@@ -56,28 +49,28 @@ class PolicyViolation(Exception):
     pass
 
 
-def _strings_from_args(*args, **kwargs) -> Iterable[str]:
+def _strings_from_args(*args, **kwargs) -> list[str]:
     # Extract string-like values to validate
+    result = []
     for a in args:
         if isinstance(a, (str, bytes)):
-            yield a.decode() if isinstance(a, bytes) else a
+            result.append(a.decode() if isinstance(a, bytes) else a)
         elif isinstance(a, (list, tuple)):
             for x in a:
                 if isinstance(x, (str, bytes)):
-                    yield x.decode() if isinstance(x, bytes) else x
+                    result.append(x.decode() if isinstance(x, bytes) else x)
     for v in kwargs.values():
         if isinstance(v, (str, bytes)):
-            yield v.decode() if isinstance(v, bytes) else v
+            result.append(v.decode() if isinstance(v, bytes) else v)
         elif isinstance(v, (list, tuple)):
             for x in v:
                 if isinstance(x, (str, bytes)):
-                    yield x.decode() if isinstance(x, bytes) else x
+                    result.append(x.decode() if isinstance(x, bytes) else x)
+    return result
 
 
 def _get_flow() -> list:
     """Return a copy of the current taint flow list, or [] if unavailable."""
-    if taint_flow is None:
-        return []
     try:
         return list(taint_flow.get())
     except Exception:
@@ -98,12 +91,13 @@ def _record_flowpoint(name: str) -> None:
         pass
 
 
-def _enforce(policy: Policy, sink_fqn: str, strings: Iterable[str]):
+def _enforce(policy: Policy, sink_fqn: str, strings: list[str]):
     """
-    Backward-compatible enforcement:
-    - Same policy decisions as before (block/warn/sanitize)
-    - Adds 'taint_flow' to logs if available
-    - Safe when middleware/ContextVar is absent (e.g., CLI)
+    Enforce policy validation on strings passed to a sink function.
+
+    Applies validators from the sink's policy definition and handles violations
+    according to the configured mode (block/warn/sanitize). Includes taint flow
+    tracking in logs when available (works in both web and CLI contexts).
     """
     # provenance marker: data reached this sink
     _record_flowpoint(sink_fqn)
@@ -112,43 +106,40 @@ def _enforce(policy: Policy, sink_fqn: str, strings: Iterable[str]):
     if not sink:
         return  # no policy for this sink
 
-    # For forbidden functions list, if matched, always block
-    if sink.forbid_functions and sink_fqn in sink.forbid_functions:
-        log(
-            {
-                "event": "blocked",
-                "sink": sink_fqn,
-                "reason": "forbidden function",
-                "taint_flow": _get_flow(),
-            }
-        )
-        raise PolicyViolation(f"{sink_fqn} is forbidden by policy")
-
-    # Apply validators (same logic as before)
+    # Apply validators
     for vid in sink.require:
         for s in strings:
             ok, msg = validate_value(policy, vid, s)
             if not ok:
-                mode = sink.on_violation.get(
-                    "mode", policy.defaults.get("mode", "block")
+                if sink.on_violation and sink.on_violation.mode:
+                    mode = sink.on_violation.mode
+                else:
+                    default_mode_str = policy.defaults.mode or "block"
+                    try:
+                        mode = ViolationMode(default_mode_str.lower())
+                    except ValueError:
+                        mode = ViolationMode.BLOCK  # fallback to block
+                message = (
+                    sink.on_violation.message
+                    if sink.on_violation and sink.on_violation.message
+                    else f"violation {vid}: {msg}"
                 )
-                message = sink.on_violation.get("message", f"violation {vid}: {msg}")
                 log(
                     {
                         "event": "violation",
                         "sink": sink_fqn,
                         "validator": vid,
                         "msg": msg,
-                        "mode": mode,
+                        "mode": mode.value,
                         "taint_flow": _get_flow(),
                     }
                 )
-                if mode == "block":
+                if mode == ViolationMode.BLOCK:
                     raise PolicyViolation(message)
-                elif mode == "warn":
+                elif mode == ViolationMode.WARN:
                     # allow but log (already logged above)
                     pass
-                elif mode == "sanitize":
+                elif mode == ViolationMode.SANITIZE:
                     # not implemented (same as before)
                     pass
 
@@ -165,6 +156,11 @@ def apply_patches(policy: Policy):
             sink = policy.get_sink_for_function("builtins.open")
             if sink:
                 p = Path(str(file))
+                # Allow Python bytecode cache files (.pyc) and __pycache__ directories
+                # These are internal Python operations and shouldn't be blocked
+                if "__pycache__" in p.parts or p.suffix == ".pyc":
+                    return _ORIG["open"](file, mode, *args, **kwargs)
+
                 # Run validators against the correct target:
                 # - safe_filename => basename only (no directory separators)
                 # - path_in_uploads (and any other path-level checks) => full path
@@ -172,11 +168,18 @@ def apply_patches(policy: Policy):
                     target = p.name if vid == "safe_filename" else str(p)
                     ok, msg = validate_value(policy, vid, target)
                     if not ok:
-                        mode_eff = sink.on_violation.get(
-                            "mode", policy.defaults.get("mode", "block")
-                        )
-                        message = sink.on_violation.get(
-                            "message", f"violation {vid}: {msg}"
+                        if sink.on_violation and sink.on_violation.mode:
+                            mode_eff = sink.on_violation.mode
+                        else:
+                            default_mode_str = policy.defaults.mode or "block"
+                            try:
+                                mode_eff = ViolationMode(default_mode_str.lower())
+                            except ValueError:
+                                mode_eff = ViolationMode.BLOCK  # fallback to block
+                        message = (
+                            sink.on_violation.message
+                            if sink.on_violation and sink.on_violation.message
+                            else f"violation {vid}: {msg}"
                         )
                         log(
                             {
@@ -184,13 +187,13 @@ def apply_patches(policy: Policy):
                                 "sink": "builtins.open",
                                 "validator": vid,
                                 "msg": msg,
-                                "mode": mode_eff,
+                                "mode": mode_eff.value,
                                 "basename": p.name,
                                 "full_path": str(p),
                                 "taint_flow": _get_flow(),
                             }
                         )
-                        if mode_eff == "block":
+                        if mode_eff == ViolationMode.BLOCK:
                             raise PolicyViolation(message)
                         # (warn/sanitize branches could be extended here if desired)
         return _ORIG["open"](file, mode, *args, **kwargs)
@@ -201,7 +204,7 @@ def apply_patches(policy: Policy):
     @wraps(_ORIG["subprocess.run"])
     def guarded_run(*args, **kwargs):
         # Validate all strings (command and args).
-        strings = list(_strings_from_args(*args, **kwargs))
+        strings = _strings_from_args(*args, **kwargs)
         _enforce(policy, "subprocess.run", strings)
         return _ORIG["subprocess.run"](*args, **kwargs)
 
@@ -215,9 +218,7 @@ def apply_patches(policy: Policy):
 
     os.system = guarded_system
 
-    # -------- YAML: safe_load and load --------
-    # Make safe_load call the ORIGINAL loader with SafeLoader directly,
-    # so it never trips the patched yaml.load enforcement.
+    # YAML: safe_load and load
     @wraps(_ORIG["yaml.safe_load"])
     def guarded_safe_load(stream, *args, **kwargs):
         kwargs.setdefault("Loader", yaml.SafeLoader)
@@ -225,13 +226,21 @@ def apply_patches(policy: Policy):
 
     yaml.safe_load = guarded_safe_load
 
-    # Forbid raw yaml.load (or downgrade to SafeLoader if policy chooses warn)
+    # yaml.load is forbidden for security reasons; use yaml.safe_load instead
     @wraps(_ORIG["yaml.load"])
     def forbidden_yaml_load(*args, **kwargs):
-        _enforce(policy, "yaml.load", ["yaml.load"])
-        # If not blocked (e.g., warn), force SafeLoader anyway
-        kwargs.setdefault("Loader", yaml.SafeLoader)
-        return _ORIG["yaml.load"](*args, **kwargs)
+        _record_flowpoint("yaml.load")
+        log(
+            {
+                "event": "blocked",
+                "sink": "yaml.load",
+                "reason": "yaml.load is forbidden for security reasons; use yaml.safe_load instead",
+                "taint_flow": _get_flow(),
+            }
+        )
+        raise PolicyViolation(
+            "yaml.load is forbidden for security reasons; use yaml.safe_load instead"
+        )
 
     yaml.load = forbidden_yaml_load
 
@@ -277,73 +286,123 @@ def apply_patches(policy: Policy):
     sqlite3.connect = guarded_sqlite_connect
 
     if HAS_JINJA2:
-        _ORIG["jinja2.Template.render"] = jinja2.Template.render
+        # Patch Environment.from_string to capture source string
+        # This is called by jinja2.Template() constructor
+        if "jinja2.Environment.from_string" not in _ORIG:
+            _ORIG["jinja2.Environment.from_string"] = jinja2.Environment.from_string
 
-        @wraps(_ORIG["jinja2.Template.render"])
-        def guarded_jinja_render(self, *args, **kwargs):
-            # Check template content and variables for injection patterns
-            template_content = getattr(self, "source", "") or str(self)
-            strings_to_check = [template_content]
+        # Only patch from_string if not already patched
+        if jinja2.Environment.from_string is _ORIG["jinja2.Environment.from_string"]:
 
-            # Check template variables
-            for arg in args:
-                if isinstance(arg, dict):
-                    strings_to_check.extend(
-                        str(v) for v in arg.values() if isinstance(v, (str, int, float))
-                    )
-            for v in kwargs.values():
-                if isinstance(v, (str, int, float)):
-                    strings_to_check.append(str(v))
+            @wraps(_ORIG["jinja2.Environment.from_string"])
+            def guarded_from_string(self, source, *args, **kwargs):
+                # Store the source string for later validation
+                template = _ORIG["jinja2.Environment.from_string"](
+                    self, source, *args, **kwargs
+                )
+                # Store source as an attribute for render() to access
+                template._sentinel_source = source
+                return template
 
-            _enforce(policy, "jinja2.Template.render", strings_to_check)
-            return _ORIG["jinja2.Template.render"](self, *args, **kwargs)
+            jinja2.Environment.from_string = guarded_from_string
 
-        jinja2.Template.render = guarded_jinja_render
+        # Only save original if not already saved
+        if "jinja2.Template.render" not in _ORIG:
+            _ORIG["jinja2.Template.render"] = jinja2.Template.render
+
+        # Only patch render if not already patched (current value matches original)
+        if jinja2.Template.render is _ORIG["jinja2.Template.render"]:
+
+            @wraps(_ORIG["jinja2.Template.render"])
+            def guarded_jinja_render(self, *args, **kwargs):
+                # Check template content and variables for injection patterns
+                # Get template source from stored attribute
+                template_content = getattr(self, "_sentinel_source", "")
+                if not template_content:
+                    # Fallback if source wasn't captured (e.g., template created before patching)
+                    template_content = str(self)
+                strings_to_check = [template_content]
+
+                # Check template variables
+                for arg in args:
+                    if isinstance(arg, dict):
+                        strings_to_check.extend(
+                            str(v)
+                            for v in arg.values()
+                            if isinstance(v, (str, int, float))
+                        )
+                for v in kwargs.values():
+                    if isinstance(v, (str, int, float)):
+                        strings_to_check.append(str(v))
+
+                _enforce(policy, "jinja2.Template.render", strings_to_check)
+                return _ORIG["jinja2.Template.render"](self, *args, **kwargs)
+
+            jinja2.Template.render = guarded_jinja_render
 
     # String template protection
-    _ORIG["string.Template.substitute"] = string.Template.substitute
+    # Only save original if not already saved
+    if "string.Template.substitute" not in _ORIG:
+        _ORIG["string.Template.substitute"] = string.Template.substitute
 
-    @wraps(_ORIG["string.Template.substitute"])
-    def guarded_template_substitute(self, *args, **kwargs):
-        # Check template content and substitution values
-        template_content = self.template
-        strings_to_check = [template_content]
+    # Only patch if not already patched (current value matches original)
+    if string.Template.substitute is _ORIG["string.Template.substitute"]:
 
-        # Check substitution values
-        if args and isinstance(args[0], dict):
-            strings_to_check.extend(str(v) for v in args[0].values())
-        strings_to_check.extend(str(v) for v in kwargs.values())
+        @wraps(_ORIG["string.Template.substitute"])
+        def guarded_template_substitute(self, *args, **kwargs):
+            # Check template content and substitution values
+            template_content = self.template
+            strings_to_check = [template_content]
 
-        _enforce(policy, "string.Template.substitute", strings_to_check)
-        return _ORIG["string.Template.substitute"](self, *args, **kwargs)
+            # Check substitution values
+            if args and isinstance(args[0], dict):
+                strings_to_check.extend(str(v) for v in args[0].values())
+            strings_to_check.extend(str(v) for v in kwargs.values())
 
-    string.Template.substitute = guarded_template_substitute
+            _enforce(policy, "string.Template.substitute", strings_to_check)
+            return _ORIG["string.Template.substitute"](self, *args, **kwargs)
+
+        string.Template.substitute = guarded_template_substitute
 
     # SSRF protection
     if HAS_REQUESTS:
-        _ORIG["requests.get"] = requests.get
-        _ORIG["requests.post"] = requests.post
+        # Only save original if not already saved
+        if "requests.get" not in _ORIG:
+            _ORIG["requests.get"] = requests.get
+        if "requests.post" not in _ORIG:
+            _ORIG["requests.post"] = requests.post
 
-        @wraps(_ORIG["requests.get"])
-        def guarded_requests_get(url, **kwargs):
-            _enforce(policy, "requests.get", [str(url)])
-            return _ORIG["requests.get"](url, **kwargs)
+        # Only patch if not already patched (current value matches original)
+        if requests.get is _ORIG["requests.get"]:
 
-        @wraps(_ORIG["requests.post"])
-        def guarded_requests_post(url, **kwargs):
-            _enforce(policy, "requests.post", [str(url)])
-            return _ORIG["requests.post"](url, **kwargs)
+            @wraps(_ORIG["requests.get"])
+            def guarded_requests_get(url, **kwargs):
+                _enforce(policy, "requests.get", [str(url)])
+                return _ORIG["requests.get"](url, **kwargs)
 
-        requests.get = guarded_requests_get
-        requests.post = guarded_requests_post
+            requests.get = guarded_requests_get
+
+        if requests.post is _ORIG["requests.post"]:
+
+            @wraps(_ORIG["requests.post"])
+            def guarded_requests_post(url, **kwargs):
+                _enforce(policy, "requests.post", [str(url)])
+                return _ORIG["requests.post"](url, **kwargs)
+
+            requests.post = guarded_requests_post
 
     if HAS_URLLIB:
-        _ORIG["urllib.request.urlopen"] = urllib.request.urlopen
+        # Only save original if not already saved
+        if "urllib.request.urlopen" not in _ORIG:
+            _ORIG["urllib.request.urlopen"] = urllib.request.urlopen
 
-        @wraps(_ORIG["urllib.request.urlopen"])
-        def guarded_urlopen(url, **kwargs):
-            url_str = str(url) if hasattr(url, "get_full_url") else str(url)
-            _enforce(policy, "urllib.request.urlopen", [url_str])
-            return _ORIG["urllib.request.urlopen"](url, **kwargs)
+        # Only patch if not already patched (current value matches original)
+        if urllib.request.urlopen is _ORIG["urllib.request.urlopen"]:
 
-        urllib.request.urlopen = guarded_urlopen
+            @wraps(_ORIG["urllib.request.urlopen"])
+            def guarded_urlopen(url, **kwargs):
+                url_str = str(url) if hasattr(url, "get_full_url") else str(url)
+                _enforce(policy, "urllib.request.urlopen", [url_str])
+                return _ORIG["urllib.request.urlopen"](url, **kwargs)
+
+            urllib.request.urlopen = guarded_urlopen

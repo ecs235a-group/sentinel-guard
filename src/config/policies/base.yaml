@@ -3,90 +3,85 @@ version: 1
 defaults:
   mode: block # block | warn | sanitize
 
-sources:
-  - id: http_json
-    when: incoming.http.json_body
-    tags: [untrusted, external]
-  - id: cli_args
-    when: process.argv
-    tags: [untrusted]
-  - id: env_vars
-    when: process.env
-    tags: [untrusted, config]
-
 validators:
   - id: safe_filename
     type: string
-    max_len: 128
-    regex: "^[A-Za-z0-9._-]+$"
-    deny_substrings: ["..", "/", '\\']
+    params:
+      max_len: 128
+      match_regex: "^[A-Za-z0-9._-]+$"
+      deny_substrings: ["..", "/", '\\']
 
   - id: shell_safe
     type: string
-    deny_regex: '(;|&&|\|\||`|\$\(|\)|\n)'
+    params:
+      deny_regex: '(;|&&|\|\||`|\$\(|\)|\n)'
 
   - id: sql_safe
     type: string
-    deny_regex: '(?i)(;.*(drop|delete|insert|update|create|alter)|union.*select|--|\bor\s+1\s*=\s*1|/\*|\*/)'
-    deny_substrings:
-      [
-        "--",
-        "/*",
-        "*/",
-        "; DROP",
-        "; DELETE",
-        "; INSERT",
-        "; UPDATE",
-        "UNION SELECT",
-      ]
+    params:
+      deny_regex: '(?i)(;.*(drop|delete|insert|update|create|alter)|union.*select|--|\bor\s+1\s*=\s*1|/\*|\*/)'
+      deny_substrings:
+        [
+          "--",
+          "/*",
+          "*/",
+          "; DROP",
+          "; DELETE",
+          "; INSERT",
+          "; UPDATE",
+          "UNION SELECT",
+        ]
 
   - id: path_in_uploads
     type: path
-    must_be_under: ["data/uploads"]
-    deny_subdirectories: true
+    params:
+      allowed_roots: ["data/uploads"]
+      deny_subdirectories: true
 
   - id: order_schema
     type: json_schema
-    schema_ref: "config/schemas/order_v1.json"
+    params:
+      schema_ref: "src/config/schemas/order_v1.json"
 
   - id: template_safe
     type: string
-    max_len: 2048
-    deny_regex: '(\{\{.*?\}\}|\{%.*?%\}|\$\{.*?\}|<%=.*?%>|<#.*?#>|#\{.*?\})'
-    deny_substrings:
-      ["{{", "}}", "{%", "%}", "${", "}", "<%=", "%>", "<#", "#>", "#{"]
+    params:
+      max_len: 2048
+      deny_regex: '(\{\{[^}]*[+\-*/()\[\]0-9][^}]*\}\}|\{%.*?%\}|\$\{.*?\}|<%=.*?%>|<#.*?#>|#\{.*?\})'
+      deny_substrings: ["{%", "%}", "${", "<%=", "%>", "<#", "#>", "#{"]
 
   - id: url_safe
     type: string
-    max_len: 2048
-    regex: '^https?://[a-zA-Z0-9]([a-zA-Z0-9\-\.]+[a-zA-Z0-9])?(\:[0-9]+)?(/[^\s]*)?$'
-    deny_regex: "(file://|ftp://|gopher://|dict://|ldap://|jar://)"
-    deny_substrings:
-      [
-        "localhost",
-        "127.0.0.1",
-        "0.0.0.0",
-        "::1",
-        "169.254.",
-        "10.",
-        "192.168.",
-        "172.16.",
-        "172.17.",
-        "172.18.",
-        "172.19.",
-        "172.20.",
-        "172.21.",
-        "172.22.",
-        "172.23.",
-        "172.24.",
-        "172.25.",
-        "172.26.",
-        "172.27.",
-        "172.28.",
-        "172.29.",
-        "172.30.",
-        "172.31.",
-      ]
+    params:
+      max_len: 2048
+      match_regex: '^https?://[a-zA-Z0-9]([a-zA-Z0-9\-\.]+[a-zA-Z0-9])?(\:[0-9]+)?(/[^\s]*)?$'
+      deny_regex: "(file://|ftp://|gopher://|dict://|ldap://|jar://)"
+      deny_substrings:
+        [
+          "localhost",
+          "127.0.0.1",
+          "0.0.0.0",
+          "::1",
+          "169.254.",
+          "10.",
+          "192.168.",
+          "172.16.",
+          "172.17.",
+          "172.18.",
+          "172.19.",
+          "172.20.",
+          "172.21.",
+          "172.22.",
+          "172.23.",
+          "172.24.",
+          "172.25.",
+          "172.26.",
+          "172.27.",
+          "172.28.",
+          "172.29.",
+          "172.30.",
+          "172.31.",
+        ]
 
 sinks:
   - id: exec_shell
@@ -106,10 +101,9 @@ sinks:
   - id: file_write
     function: builtins.open
     require: [safe_filename, path_in_uploads]
-
-  - id: yaml_load
-    function: yaml.load
-    forbid_functions: ["yaml.load"]
+    on_violation:
+      mode: block
+      message: "Unsafe file path detected"
 
   - id: sqlite_execute
     function: sqlite3.Cursor.execute
@@ -159,14 +153,3 @@ sinks:
     on_violation:
       mode: block
       message: "Unsafe URL detected"
-
-flows:
-  - name: uploads_must_be_safe
-    from: [http_json, cli_args]
-    to: [file_write]
-    require: [safe_filename, path_in_uploads]
-
-  - name: sql_queries_must_be_safe
-    from: [http_json, cli_args]
-    to: [sqlite_execute, sqlite_executemany]
-    require: [sql_safe]

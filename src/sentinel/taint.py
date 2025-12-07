@@ -1,5 +1,4 @@
-from __future__ import annotations
-from typing import Any, Iterable
+from typing import Any
 
 
 class TaintedStr(str):
@@ -7,7 +6,7 @@ class TaintedStr(str):
 
     __slots__ = ("_taint_tags",)
 
-    def __new__(cls, value: str, tags: Iterable[str] = ()):
+    def __new__(cls, value: str, tags: tuple[str, ...] = ()):
         obj = super().__new__(cls, value)
         obj._taint_tags = set(tags)
         return obj
