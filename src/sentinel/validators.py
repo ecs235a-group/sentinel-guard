@@ -9,6 +9,8 @@ from jsonschema import Draft7Validator, exceptions as jsonschema_exceptions
 from .policy import Policy
 from .taint import TaintedStr
 
+_schema_cache: dict[str, Draft7Validator] = {}
+
 
 class ValidationError(Exception):
     pass
@@ -19,6 +21,17 @@ def _normalize_text(value: str) -> str:
         return unicodedata.normalize("NFC", value)
     except Exception:
         return value
+
+
+def _load_schema(ref: str) -> Draft7Validator:
+    if ref in _schema_cache:
+        return _schema_cache[ref]
+    # Assume local file path
+    with open(ref, "r", encoding="utf-8") as f:
+        schema = json.load(f)
+    v = Draft7Validator(schema)
+    _schema_cache[ref] = v
+    return v
 
 
 def _validate_string(value: Any, params: dict[str, Any]) -> tuple[bool, str]:
@@ -86,20 +99,6 @@ def _validate_path(value: Any, params: dict[str, Any]) -> tuple[bool, str]:
     return False, f"path not under allowed roots: {must_be_under}"
 
 
-_schema_cache: dict[str, Draft7Validator] = {}
-
-
-def _load_schema(ref: str) -> Draft7Validator:
-    if ref in _schema_cache:
-        return _schema_cache[ref]
-    # Assume local file path
-    with open(ref, "r", encoding="utf-8") as f:
-        schema = json.load(f)
-    v = Draft7Validator(schema)
-    _schema_cache[ref] = v
-    return v
-
-
 def _validate_json(obj: Any, params: dict[str, Any]) -> tuple[bool, str]:
     ref = params.get("schema_ref")
     if not ref:
@@ -116,7 +115,7 @@ def _validate_json(obj: Any, params: dict[str, Any]) -> tuple[bool, str]:
     except Exception as e:
         return False, f"json schema load/validate error: {e}"
 
-
+# Public APIs
 def validate_value(policy: Policy, validator_id: str, value: Any) -> tuple[bool, str]:
     vdef = policy.validators.get(validator_id)
     if not vdef:
