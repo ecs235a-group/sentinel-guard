@@ -195,7 +195,12 @@ def apply_patches(policy: Policy):
                         )
                         if mode_eff == ViolationMode.BLOCK:
                             raise PolicyViolation(message)
-                        # (warn/sanitize branches could be extended here if desired)
+                        elif mode_eff == ViolationMode.WARN:
+                            # allow but log (already logged above)
+                            pass
+                        elif mode_eff == ViolationMode.SANITIZE:
+                            # not implemented yet
+                            pass
         return _ORIG["open"](file, mode, *args, **kwargs)
 
     builtins.open = guarded_open
