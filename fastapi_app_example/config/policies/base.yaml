@@ -1,0 +1,155 @@
+version: 1
+
+defaults:
+  mode: block # block | warn | sanitize
+
+validators:
+  - id: safe_filename
+    type: string
+    params:
+      max_len: 128
+      match_regex: "^[A-Za-z0-9._-]+$"
+      deny_substrings: ["..", "/", '\\']
+
+  - id: shell_safe
+    type: string
+    params:
+      deny_regex: '(;|&&|\|\||`|\$\(|\)|\n)'
+
+  - id: sql_safe
+    type: string
+    params:
+      deny_regex: '(?i)(;.*(drop|delete|insert|update|create|alter)|union.*select|--|\bor\s+1\s*=\s*1|/\*|\*/)'
+      deny_substrings:
+        [
+          "--",
+          "/*",
+          "*/",
+          "; DROP",
+          "; DELETE",
+          "; INSERT",
+          "; UPDATE",
+          "UNION SELECT",
+        ]
+
+  - id: path_in_uploads
+    type: path
+    params:
+      allowed_roots: ["data/uploads"]
+      deny_subdirectories: true
+
+  - id: order_schema
+    type: json_schema
+    params:
+      schema_ref: "config/schemas/order_v1.json"
+
+  - id: template_safe
+    type: string
+    params:
+      max_len: 2048
+      deny_regex: '(\{\{[^}]*[+\-*/()\[\]0-9][^}]*\}\}|\{%.*?%\}|\$\{.*?\}|<%=.*?%>|<#.*?#>|#\{.*?\})'
+      deny_substrings: ["{%", "%}", "${", "<%=", "%>", "<#", "#>", "#{"]
+
+  - id: url_safe
+    type: string
+    params:
+      max_len: 2048
+      match_regex: '^https?://[a-zA-Z0-9]([a-zA-Z0-9\-\.]+[a-zA-Z0-9])?(\:[0-9]+)?(/[^\s]*)?$'
+      deny_regex: "(file://|ftp://|gopher://|dict://|ldap://|jar://)"
+      deny_substrings:
+        [
+          "localhost",
+          "127.0.0.1",
+          "0.0.0.0",
+          "::1",
+          "169.254.",
+          "10.",
+          "192.168.",
+          "172.16.",
+          "172.17.",
+          "172.18.",
+          "172.19.",
+          "172.20.",
+          "172.21.",
+          "172.22.",
+          "172.23.",
+          "172.24.",
+          "172.25.",
+          "172.26.",
+          "172.27.",
+          "172.28.",
+          "172.29.",
+          "172.30.",
+          "172.31.",
+        ]
+
+sinks:
+  - id: exec_shell
+    function: subprocess.run
+    require: [shell_safe]
+    on_violation:
+      mode: block
+      message: "Shell metacharacters not allowed"
+
+  - id: os_system
+    function: os.system
+    require: [shell_safe]
+    on_violation:
+      mode: block
+      message: "Shell metacharacters not allowed"
+
+  - id: file_write
+    function: builtins.open
+    require: [safe_filename, path_in_uploads]
+    on_violation:
+      mode: block
+      message: "Unsafe file path detected"
+
+  - id: sqlite_execute
+    function: sqlite3.Cursor.execute
+    require: [sql_safe]
+    on_violation:
+      mode: block
+      message: "SQL injection patterns detected"
+
+  - id: sqlite_executemany
+    function: sqlite3.Cursor.executemany
+    require: [sql_safe]
+    on_violation:
+      mode: block
+      message: "SQL injection patterns detected"
+
+  - id: jinja_render
+    function: jinja2.Template.render
+    require: [template_safe]
+    on_violation:
+      mode: block
+      message: "Template injection patterns detected"
+
+  - id: string_template
+    function: string.Template.substitute
+    require: [template_safe]
+    on_violation:
+      mode: block
+      message: "Template injection patterns detected"
+
+  - id: http_request
+    function: requests.get
+    require: [url_safe]
+    on_violation:
+      mode: block
+      message: "Unsafe URL detected"
+
+  - id: http_post
+    function: requests.post
+    require: [url_safe]
+    on_violation:
+      mode: block
+      message: "Unsafe URL detected"
+
+  - id: urlopen_request
+    function: urllib.request.urlopen
+    require: [url_safe]
+    on_violation:
+      mode: block
+      message: "Unsafe URL detected"
