@@ -41,7 +41,7 @@ validators:
   - id: order_schema
     type: json_schema
     params:
-      schema_ref: "src/config/schemas/order_v1.json"
+      schema_ref: "src/tests/fixtures/json_schema.json"
 
   - id: template_safe
     type: string

@@ -2,7 +2,7 @@ from pathlib import Path
 from sentinel.policy import load_policy
 from sentinel.validators import validate_value
 
-policy_path = Path(__file__).parents[1] / "config" / "policies" / "base.yaml"
+policy_path = Path(__file__).parent / "fixtures" / "policy.yaml"
 policy = load_policy(str(policy_path))
 
 
@@ -89,3 +89,72 @@ def test_subdirectory_constraint(tmp_path):
     ok, msg = validate_value(policy, "path_in_uploads", nested_path)
     assert not ok and "subdirectories disallowed" in msg.lower()
     print(f"Subdirectory test passed: {msg}")
+
+
+def test_json_schema():
+    """Test JSON schema validation."""
+    ok, msg = validate_value(
+        policy, "order_schema", {"filename": "a.txt", "content": "QQ=="}
+    )
+    assert ok, msg
+
+    ok, msg = validate_value(policy, "order_schema", {"filename": "a.txt"})
+    assert not ok  # missing required field 'content'
+
+    ok, msg = validate_value(
+        policy, "order_schema", {"filename": "", "content": "QQ=="}
+    )
+    assert not ok  # filename too short
+
+
+def test_shell_safe():
+    """Test shell injection detection."""
+    ok, msg = validate_value(policy, "shell_safe", "image.jpg")
+    assert ok, msg
+
+    ok, msg = validate_value(policy, "shell_safe", "image.jpg && rm -rf /")
+    assert not ok
+
+    ok, msg = validate_value(policy, "shell_safe", "echo hello; cat file")
+    assert not ok
+
+
+def test_sql_safe():
+    """Test SQL injection detection."""
+    ok, msg = validate_value(policy, "sql_safe", "SELECT * FROM users")
+    assert ok, msg
+
+    ok, msg = validate_value(policy, "sql_safe", "alice'; DROP TABLE users; --")
+    assert not ok
+
+    ok, msg = validate_value(
+        policy, "sql_safe", "SELECT * FROM users UNION SELECT * FROM admins"
+    )
+    assert not ok
+
+
+def test_template_safe():
+    """Test template injection detection."""
+    ok, msg = validate_value(policy, "template_safe", "Hello, Alice!")
+    assert ok, msg
+
+    ok, msg = validate_value(policy, "template_safe", "Hello, {{7*7}}!")
+    assert not ok
+
+    ok, msg = validate_value(policy, "template_safe", "Hello, ${name}!")
+    assert not ok
+
+
+def test_url_safe():
+    """Test SSRF protection."""
+    ok, msg = validate_value(policy, "url_safe", "https://httpbin.org/get")
+    assert ok, msg
+
+    ok, msg = validate_value(policy, "url_safe", "http://localhost:22")
+    assert not ok
+
+    ok, msg = validate_value(policy, "url_safe", "file:///etc/passwd")
+    assert not ok
+
+    ok, msg = validate_value(policy, "url_safe", "http://127.0.0.1:8080")
+    assert not ok
