@@ -17,7 +17,7 @@ Simple FastAPI application to sentinel-guard.
 ## Running the App
 
 ```bash
-cd fastapi_app
+cd fastapi_app_example
 python app.py
 ```
 
@@ -27,7 +27,7 @@ The API will be available at `http://localhost:8000`
 
 ### GET /
 
-Root endpoint with API information.
+Root endpoint with API information on another terminal window.
 
 ### POST /upload
 
