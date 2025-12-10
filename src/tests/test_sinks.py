@@ -176,7 +176,7 @@ def test_requests_get_safe():
     """Test that safe HTTP requests are allowed."""
     import requests
 
-    response = requests.get("https://httpbin.org/get", timeout=5)
+    response = requests.get("https://example.com", timeout=5)
     assert response.status_code == 200
 
 
@@ -196,7 +196,7 @@ def test_urllib_urlopen_safe():
     """Test that safe urllib requests are allowed."""
     import urllib.request
 
-    with urllib.request.urlopen("https://httpbin.org/get", timeout=5) as response:
+    with urllib.request.urlopen("https://example.com", timeout=5) as response:
         assert response.status == 200
 
 

@@ -147,7 +147,7 @@ def test_template_safe():
 
 def test_url_safe():
     """Test SSRF protection."""
-    ok, msg = validate_value(policy, "url_safe", "https://httpbin.org/get")
+    ok, msg = validate_value(policy, "url_safe", "https://example.com")
     assert ok, msg
 
     ok, msg = validate_value(policy, "url_safe", "http://localhost:22")
