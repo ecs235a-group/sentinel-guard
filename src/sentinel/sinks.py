@@ -158,7 +158,13 @@ def apply_patches(policy: Policy):
                 p = Path(str(file))
                 # Allow Python bytecode cache files (.pyc) and __pycache__ directories
                 # These are internal Python operations and shouldn't be blocked
-                if "__pycache__" in p.parts or p.suffix == ".pyc":
+                # Also allow pytest cache directories to avoid interfering with test execution
+                if (
+                    "__pycache__" in p.parts
+                    or p.suffix == ".pyc"
+                    or ".pytest_cache" in p.parts
+                    or any("pytest-cache" in part for part in p.parts)
+                ):
                     return _ORIG["open"](file, mode, *args, **kwargs)
 
                 # Run validators against the correct target:
