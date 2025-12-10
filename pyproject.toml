@@ -8,7 +8,7 @@ authors = [
     { name = "Sarika-dinesh", email = "sarikadinesh@ucdavis.edu"},
     { name = "shreyaslshah", email = "slshah@ucdavis.edu"}
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0.3",
     "jsonschema>=4.22.0",
